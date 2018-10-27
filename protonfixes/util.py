@@ -4,16 +4,21 @@
 import configparser
 import os
 import sys
+import re
 import shutil
 import signal
+import zipfile
 import subprocess
+import urllib.request
 from .logger import log
+from . import config
+
 try:
     import __main__ as protonmain
 except ImportError:
     log.warn('Unable to hook into Proton main script environment')
 
-# pylint: disable=I1101, W0101
+# pylint: disable=unreachable
 
 def which(appname):
     """ Returns the full path of an executable in $PATH
@@ -42,6 +47,17 @@ def protonprefix():
     return os.path.join(
         os.environ['STEAM_COMPAT_DATA_PATH'],
         'pfx/')
+
+
+def protonversion():
+    """ Returns the version of proton from sys.argv[0]
+    """
+
+    version = re.search('Proton ([0-9]*\\.[0-9]*)', sys.argv[0])
+    if version:
+        return version.group(1)
+    log.warn('Proton version not parsed from command line')
+    return None
 
 
 def _killhanging():
@@ -85,7 +101,7 @@ def checkinstalled(verb):
     """ Returns True if the winetricks verb is found in the winetricks log
     """
 
-    if type(verb) is not str:
+    if not isinstance(verb, str):
         return False
 
     log.info('Checking if winetricks ' + verb + ' is installed')
@@ -105,14 +121,15 @@ def protontricks(verb):
 
     if not checkinstalled(verb):
         log.info('Installing winetricks ' + verb)
-        env = dict(os.environ)
+        env = dict(protonmain.env)
         env['WINEPREFIX'] = protonprefix()
-        env['WINESERVER'] = os.path.join(protondir(), 'dist/bin/wineserver')
+        env['WINE'] = protonmain.wine_path
+        env['WINELOADER'] = protonmain.wine_path
+        env['WINESERVER'] = os.path.join(protonmain.bindir, 'wineserver')
         env['WINETRICKS_LATEST_VERSION_CHECK'] = 'disabled'
 
         winetricks_bin = which('winetricks')
         winetricks_cmd = [winetricks_bin, '--unattended', '--force'] + verb.split(' ')
-        wineserver_bin = env['WINESERVER']
 
         if winetricks_bin is None:
             log.warn('No winetricks was found in $PATH')
@@ -136,7 +153,6 @@ def protontricks(verb):
             process = subprocess.Popen(winetricks_cmd, env=env)
             process.wait()
             _killhanging()
-            subprocess.Popen([wineserver_bin, '-k'], env=env)
             log.info('Winetricks complete')
             return True
 
@@ -275,13 +291,13 @@ def disable_d3d10():
     winedll_override('d3d10_1', '')
     winedll_override('d3d10core', '')
 
-def disable_dxvk():
+def disable_dxvk():  # pylint: disable=missing-docstring
     set_environment('PROTON_USE_WINED3D11', '1')
 
-def disable_esync():
+def disable_esync():  # pylint: disable=missing-docstring
     set_environment('PROTON_NO_ESYNC', '1')
-    
-def disable_d3d11():
+
+def disable_d3d11():  # pylint: disable=missing-docstring
     set_environment('PROTON_NO_D3D11', '1')
 
 
@@ -298,3 +314,62 @@ def create_dosbox_conf(conf_file, conf_dict):
     conf.read_dict(conf_dict)
     with open(conf_file, 'w') as file:
         conf.write(file)
+
+
+def read_dxvk_conf(cfp):
+    """ Add fake [DEFAULT] section to dxvk.conf
+    """
+    yield '['+ configparser.ConfigParser().default_section +']'
+    yield from cfp
+
+
+def set_dxvk_option(opt, val, cfile='/tmp/protonfixes_dxvk.conf'):
+    """ Create custom DXVK config file
+
+    See https://github.com/doitsujin/dxvk/wiki/Configuration for details
+    """
+    conf = configparser.ConfigParser()
+    conf.optionxform = str
+    section = conf.default_section
+    dxvk_conf = os.path.join(get_game_install_path(), 'dxvk.conf')
+
+    conf.read(cfile)
+
+    if not conf.has_option(section, 'session') or conf.getint(section, 'session') != os.getpid():
+        log.info('Creating new DXVK config')
+        set_environment('DXVK_CONFIG_FILE', cfile)
+
+        conf = configparser.ConfigParser()
+        conf.optionxform = str
+        conf.set(section, 'session', str(os.getpid()))
+
+        if os.access(dxvk_conf, os.F_OK):
+            conf.read_file(read_dxvk_conf(open(dxvk_conf)))
+        log.debug(conf.items(section))
+
+    # set option
+    log.info('Addinging DXVK option: '+ str(opt) + ' = ' + str(val))
+    conf.set(section, opt, str(val))
+
+    with open(cfile, 'w') as configfile:
+        conf.write(configfile)
+
+def install_from_zip(url, filename, path=os.getcwd()):
+    """ Install a file from a downloaded zip
+    """
+
+    if filename in os.listdir(path):
+        log.info('File ' + filename + ' found in ' + path)
+        return
+
+    cache_dir = config.cache_dir
+    zip_file_name = os.path.basename(url)
+    zip_file_path = os.path.join(cache_dir, zip_file_name)
+
+    if zip_file_name not in os.listdir(cache_dir):
+        log.info('Downloading ' + filename + ' to ' + zip_file_path)
+        urllib.request.urlretrieve(url, zip_file_path)
+
+    with zipfile.ZipFile(zip_file_path, 'r') as zip_obj:
+        log.info('Extracting ' + filename + ' to ' + path)
+        zip_obj.extract(filename, path=path)

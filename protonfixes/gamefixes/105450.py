@@ -3,13 +3,10 @@
 #pylint: disable=C0103
 
 from protonfixes import util
-from protonfixes.logger import log
 
 def main():
     """ Uses win32 prefix, installs corefonts, dsound, l3codecx quarts mfc42 d3dx9 and dotnet20
     """
-
-    log('Applying fixes for Age Of Empire 3: Complete Collection')
 
     # Winetrick wmp9 requires 32bit prefix
     util.use_win32_prefix()

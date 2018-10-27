@@ -3,13 +3,10 @@
 #pylint: disable=C0103
 
 from protonfixes import util
-from protonfixes.logger import log
 
 def main():
     """ Changes the proton argument from the launcher to the game
     """
-
-    log('Applying fixes for FINAL FANTASY IX')
 
     # Fix crackling audio
     util.set_environment('PULSE_LATENCY_MSEC', '60')

@@ -3,17 +3,14 @@
 #pylint: disable=C0103
 
 from protonfixes import util
-from protonfixes.logger import log
 
 def main():
     """ Disable ESYNC, disable intro's
     """
 
-    log('Applying fixes for BioShock 2 Remastered')
-
-    # After loading the game, or a save file, a key needs to be pressed 
-    # to continue. That screen does not respond to keyboard or mouse, 
-    # so there is no way to continue. -nointro disables that screen 
+    # After loading the game, or a save file, a key needs to be pressed
+    # to continue. That screen does not respond to keyboard or mouse,
+    # so there is no way to continue. -nointro disables that screen
     # (but also the intro's at the start of the game).
     util.append_argument('-nointro')
 

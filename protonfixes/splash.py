@@ -1,22 +1,22 @@
 """ Splash screen for protonfixes using cefpython
 """
 import os
+import sys
 import time
 import subprocess
 from multiprocessing import Process
 from contextlib import contextmanager
 from .logger import log
 
-# pylint: disable=I1101
 
 def browser(cef, url):
     """ Starts a cef browser in the middle of the screen with url
     """
 
     # Keeps the splash from displaying on short tasks
-    log.info('Delaying splash for 2 seconds')
+    log.debug('Delaying splash for 2 seconds')
     time.sleep(2)
-    log.debug('Starting splash screen')
+    log.info('Starting splash screen for long-running task')
 
     settings = {
         'background_color': 0xff000000,
@@ -30,6 +30,7 @@ def browser(cef, url):
         'disable-gpu-compositing': '',
     }
 
+    sys.excepthook = cef.ExceptHook
     cef.Initialize(settings, switches)
 
     win_info = cef.WindowInfo()
@@ -94,7 +95,7 @@ def zenity_splash():
                               stdin=subprocess.PIPE,
                               stdout=subprocess.PIPE,
                               shell=True,
-                              )
+                             )
 
     yield
     log.debug('Terminating zenity splash screen')
@@ -111,7 +112,11 @@ def cef_splash(cef, page='index.html'):
     url = 'file://' + os.path.join(data_dir, page)
     cef_proc = Process(target=browser, args=(cef, url))
     cef_proc.start()
-    yield
+    try:
+        yield
+    finally:
+        cef_proc.terminate()
+        sys.excepthook = sys.__excepthook__
     log.debug('Terminating CEF splash screen')
     cef_proc.terminate()
 
