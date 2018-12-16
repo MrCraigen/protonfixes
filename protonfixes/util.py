@@ -94,24 +94,79 @@ def _mk_syswow64():
     try:
         os.makedirs(os.path.join(protonprefix(), 'drive_c/windows/syswow64'))
     except FileExistsError:
-        log.warn('The syswor64 folder already exists')
+        log.warn('The syswow64 folder already exists')
 
 
-def checkinstalled(verb):
+def _forceinstalled(verb):
+    """ Records verb into the winetricks.log.forced file
+    """
+    forced_log = os.path.join(protonprefix(), 'winetricks.log.forced')
+    with open(forced_log, 'a') as forcedlog:
+        forcedlog.write(verb + '\n')
+
+
+def _checkinstalled(verb, logfile='winetricks.log'):
     """ Returns True if the winetricks verb is found in the winetricks log
     """
 
     if not isinstance(verb, str):
         return False
 
-    log.info('Checking if winetricks ' + verb + ' is installed')
-    winetricks_log = os.path.join(protonprefix(), 'winetricks.log')
+    winetricks_log = os.path.join(protonprefix(), logfile)
+
+    # Check for 'verb=param' verb types
+    if len(verb.split('=')) > 1:
+        wt_verb = verb.split('=')[0] + '='
+        wt_verb_param = verb.split('=')[1]
+        wt_is_set = False
+        try:
+            with open(winetricks_log, 'r') as tricklog:
+                for xline in tricklog.readlines():
+                    if re.findall(r'^' + wt_verb, xline.strip()):
+                        wt_is_set = bool(xline.strip() == wt_verb + wt_verb_param)
+            return wt_is_set
+        except OSError:
+            return False
+    # Check for regular verbs
     try:
         with open(winetricks_log, 'r') as tricklog:
-            if verb in [x.strip() for x in tricklog.readlines()]:
+            if verb in reversed([x.strip() for x in tricklog.readlines()]):
                 return True
     except OSError:
         return False
+    return False
+
+
+def checkinstalled(verb):
+    """ Returns True if the winetricks verb is found in the winetricks log
+        or in the 'winetricks.log.forced' file
+    """
+
+    log.info('Checking if winetricks ' + verb + ' is installed')
+    if _checkinstalled(verb, 'winetricks.log.forced'):
+        return True
+    return _checkinstalled(verb)
+
+
+def is_custom_verb(verb):
+    """ Returns path to custom winetricks verb, if found
+    """
+
+    verb_name = verb + '.verb'
+    verb_dir = 'verbs'
+
+    # check local custom verbs
+    verbpath = os.path.expanduser('~/.config/protonfixes/localfixes/' + verb_dir)
+    if os.path.isfile(os.path.join(verbpath, verb_name)):
+        log.debug('Using local custom winetricks verb from: ' + verbpath)
+        return os.path.join(verbpath, verb_name)
+
+    # check custom verbs
+    verbpath = os.path.join(os.path.dirname(__file__), 'gamefixes', verb_dir)
+    if os.path.isfile(os.path.join(verbpath, verb_name)):
+        log.debug('Using custom winetricks verb from: ' + verbpath)
+        return os.path.join(verbpath, verb_name)
+
     return False
 
 
@@ -127,9 +182,15 @@ def protontricks(verb):
         env['WINELOADER'] = protonmain.wine_path
         env['WINESERVER'] = os.path.join(protonmain.bindir, 'wineserver')
         env['WINETRICKS_LATEST_VERSION_CHECK'] = 'disabled'
+        env['LD_PRELOAD'] = ''
 
         winetricks_bin = which('winetricks')
-        winetricks_cmd = [winetricks_bin, '--unattended', '--force'] + verb.split(' ')
+        winetricks_cmd = [winetricks_bin, '--unattended'] + verb.split(' ')
+
+        # check is verb a custom winetricks verb
+        custom_verb = is_custom_verb(verb)
+        if custom_verb:
+            winetricks_cmd = [winetricks_bin, '--unattended', custom_verb]
 
         if winetricks_bin is None:
             log.warn('No winetricks was found in $PATH')
@@ -139,8 +200,8 @@ def protontricks(verb):
             log.debug('Using winetricks command: ' + str(winetricks_cmd))
             # winetricks relies entirely on the existence of syswow64 to determine
             # if the prefix is 64 bit, while proton fails to run without it
-            log.debug('Deleting syswow64')
             if 'win32' in protonprefix():
+                log.info('Deleting syswow64')
                 _del_syswow64()
 
             # make sure proton waits for winetricks to finish
@@ -150,15 +211,22 @@ def protontricks(verb):
                     log.debug(str(sys.argv))
 
             log.info('Using winetricks verb ' + verb)
+            subprocess.call([env['WINESERVER'], '-w'], env=env)
             process = subprocess.Popen(winetricks_cmd, env=env)
             process.wait()
             _killhanging()
+
+            # Check if verb recorded to winetricks log
+            if not checkinstalled(verb):
+                log.warn('Not recorded as installed: winetricks ' + verb + ', forcing!')
+                _forceinstalled(verb)
+
             log.info('Winetricks complete')
             return True
 
             # restore syswow64 so proton doesn't crash
-            log.info('Restoring syswow64 folder')
             if 'win32' in protonprefix():
+                log.info('Restoring syswow64 folder')
                 _mk_syswow64()
     return False
 
@@ -255,6 +323,16 @@ def set_environment(envvar, value):
     os.environ[envvar] = value
     protonmain.env[envvar] = value
 
+def del_environment(envvar):
+    """ Remove an environment variable
+    """
+
+    log.info('Removing env: ' + envvar)
+    if envvar in os.environ:
+        del os.environ[envvar]
+    if envvar in protonmain.env:
+        del protonmain.env[envvar]
+
 def get_game_install_path():
     """ Game installation path
     """
@@ -314,6 +392,53 @@ def create_dosbox_conf(conf_file, conf_dict):
     conf.read_dict(conf_dict)
     with open(conf_file, 'w') as file:
         conf.write(file)
+
+
+def _get_ini_full_path(cfile, base_path):
+    """ Find game's INI config file
+    """
+
+    # Start from 'user'/'game' directories or absolute path
+    if base_path == 'user':
+        cfg_path = os.path.join(protonprefix(), 'drive_c/users/steamuser/My Documents', cfile)
+    else:
+        if base_path == 'game':
+            cfg_path = os.path.join(get_game_install_path(), cfile)
+        else:
+            cfg_path = cfile
+
+    if os.path.exists(cfg_path) and os.access(cfg_path, os.F_OK):
+        log.debug('Found INI file: ' + cfg_path)
+        return cfg_path
+
+    log.warn('INI file not found: ' + cfg_path)
+    return False
+
+
+def set_ini_options(ini_opts, cfile, base_path='user'):
+    """ Edit game's INI config file
+    """
+    cfg_path = _get_ini_full_path(cfile, base_path)
+    if not cfg_path:
+        return False
+
+    # Backup
+    if not os.path.exists(cfg_path + '.protonfixes.bak'):
+        log.info('Creating backup for INI file')
+        shutil.copyfile(cfg_path, cfg_path + '.protonfixes.bak')
+
+    conf = configparser.ConfigParser(empty_lines_in_values=True, allow_no_value=True, strict=False)
+    conf.optionxform = str
+
+    conf.read(cfg_path)
+
+    # set options
+    log.info('Addinging INI options into '+cfile+':\n'+ str(ini_opts))
+    conf.read_string(ini_opts)
+
+    with open(cfg_path, 'w') as configfile:
+        conf.write(configfile)
+    return True
 
 
 def read_dxvk_conf(cfp):

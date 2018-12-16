@@ -2,6 +2,7 @@
 """
 
 from __future__ import print_function
+import io
 import os
 import re
 import sys
@@ -32,15 +33,20 @@ def game_name():
     """ Trys to return the game name from environment variables
     """
 
-    game_library = re.findall(r'.*/steamapps', os.environ['PWD'], re.IGNORECASE)[-1]
-    game_manifest = os.path.join(game_library, 'appmanifest_' + game_id() + '.acf')
     try:
-        with open(game_manifest, 'r') as appmanifest:
+        game_library = re.findall(r'.*/steamapps', os.environ['PWD'], re.IGNORECASE)[-1]
+        game_manifest = os.path.join(game_library, 'appmanifest_' + game_id() + '.acf')
+
+        with io.open(game_manifest, 'r', encoding='utf-8') as appmanifest:
             for xline in appmanifest.readlines():
                 if 'name' in xline.strip():
-                    name = re.findall(r'"[^"]+"', xline)[-1]
+                    name = re.findall(r'"[^"]+"', xline, re.UNICODE)[-1]
                     return name
     except OSError:
+        return 'UNKNOWN'
+    except IndexError:
+        return 'UNKNOWN'
+    except UnicodeDecodeError:
         return 'UNKNOWN'
     return 'UNKNOWN'
 
